@@ -1,0 +1,28 @@
+
+version: "3.9"
+services:
+  backend:
+    build: ./backend
+    container_name: setmytrip-backend
+    ports:
+      - "4000:3000"
+    env_file:
+      - ./backend/.env
+    networks:
+      - setmytrip-net
+
+  frontend:
+    build: ./myTrip
+    container_name: setmytrip-frontend
+    ports:
+      - "5000:5173"
+    env_file:
+      - ./myTrip/.env
+    depends_on:
+      - backend
+    networks:
+      - setmytrip-net
+
+networks:
+  setmytrip-net:
+    driver: bridge
