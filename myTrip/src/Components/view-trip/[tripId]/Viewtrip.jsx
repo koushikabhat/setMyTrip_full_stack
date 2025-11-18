@@ -52,6 +52,17 @@ const Viewtrip = () => {
     navigate('/create-trip');
   };
 
+
+  
+  //hotel image path from public direc
+  const hotelImageArr = [ 
+    '../../../../public/hotelsImg/h1.png',
+    '../../../../public/hotelsImg/h2.png',
+    '../../../../public/hotelsImg/h3.png',
+    '../../../../public/hotelsImg/h4.png',
+    '../../../../public/hotelsImg/h5.png'
+  ];
+
   return (
     <>
       <div className="main-page">
@@ -119,7 +130,7 @@ const Viewtrip = () => {
             >
               <div className="hotel-card animate-fade">
 
-                <img src={trip.tripplan.hotels[index].image_url || '/bg.jpg'} alt="hotelimages" />
+                <img src={trip.tripplan.hotels[index].image_url || hotelImageArr[index] } alt="hotelimages" />
                 <div className="hotel-name">{hotel.name}</div>
                 <div className="hotel-address">📍 {hotel.address}</div>
                 <div className="hotel-price">🏷️ Price: {hotel.price}</div>

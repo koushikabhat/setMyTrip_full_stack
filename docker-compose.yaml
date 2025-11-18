@@ -5,7 +5,7 @@ services:
     build: ./backend
     container_name: setmytrip-backend
     ports:
-      - "4000:3000"
+      - "3000:3000"
     env_file:
       - ./backend/.env
     networks:
@@ -15,7 +15,7 @@ services:
     build: ./myTrip
     container_name: setmytrip-frontend
     ports:
-      - "5000:5173"
+      - "5173:5173"
     env_file:
       - ./myTrip/.env
     depends_on:

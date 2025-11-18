@@ -1,5 +1,6 @@
 
-const { ai } = require('../config/gemeni')
+// const { ai } = require('../config/gemeni')
+const groq = require("../config/grok");
 const  {db}  = require('../config/firebase');
 const getPlaceImages = require('../service/getPlaceImages');
 
@@ -34,14 +35,34 @@ const generateTrip  = async(req, res)=>{
 
 
         //generate response from gemeni ai 
-        const response = await ai.models.generateContent({
-            model: "gemini-2.0-flash",
-            contents: prompt,
+        // const response = await ai.models.generateContent({
+        //     model: "gemini-2.0-flash",
+        //     contents: prompt,
+        // });
+
+        // const responseText = response.text;
+
+        const completion = await groq.chat.completions.create({
+            model: "llama-3.3-70b-versatile",
+            messages: [
+                { role: "user", content: prompt }
+            ],
+            temperature: 0.4,
         });
+        
+        //extract ai text
+        // console.log("Completion is : ", completion)
+        const responseText = completion.choices[0].message.content;
+
+        // console.log("Response from ai is : ",responseText);
 
         
+        
+        
+       
+
+
         //validate the response if the gemini is given a valid json or not
-        const responseText = response.text;
         const jsonStart = responseText.indexOf("{");
         const jsonEnd = responseText.lastIndexOf("}");
 
@@ -62,11 +83,13 @@ const generateTrip  = async(req, res)=>{
 
 
         //hotel image url 
+        // console.log("trip plan is .....................",tripplan);
         if(tripplan?.hotels)
         {
             for(const hotel of tripplan.hotels)
             {
-                const imagurl = await getPlaceImages(hotel.name);
+                const hotelimgquery = `${hotel.name} ${hotel?.address || destination}`
+                const imagurl = await getPlaceImages(hotelimgquery); //replace hotel.name
                 hotel.image_url = imagurl || null;
 
             } 
@@ -75,11 +98,14 @@ const generateTrip  = async(req, res)=>{
         //for place 
         if(tripplan?.itinerary) 
         {
+            // console.log("trip iternery ... ",tripplan?.itinerary)
             for(const day of tripplan.itinerary)
             {
                 for(const place of day.places)
                 {
-                    const placeimgurl = await getPlaceImages(place.name);
+                    // console.log("place is ----------",place)
+                    const querysearch = `${place?.name}`
+                    const placeimgurl = await getPlaceImages(querysearch); //place.name
                     place.image_url = placeimgurl || null;
                 }
             }
