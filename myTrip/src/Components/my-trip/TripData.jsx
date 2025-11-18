@@ -14,6 +14,7 @@ const TripData = () => {
     const [trip, setTrip] = useState([])  
     const [loading , setLoading] = useState(false);
 
+    const [selectedtripId, setselectedtripId] = useState("");
 
 
     const Navigate = useNavigate();
@@ -66,6 +67,8 @@ const TripData = () => {
       try
       {
         setLoading(true);
+        setselectedtripId(tripid);
+
         const res = await axios.delete(`${import.meta.env.VITE_BACKEND_URL}/api/trips/trip/delete/${tripid}`,{
           headers :{
             Authorization : `Bearer ${token}`,
@@ -124,10 +127,10 @@ const TripData = () => {
                   <div className="delete-btn-div">
                     <button
                       className="delete-btn"
-                      onClick={() => handledelete(tripdata.tripId)}
+                      onClick={() => {handledelete(tripdata.tripId)}}
                       disabled={loading}
                     >
-                      {loading ? (
+                      {loading && (selectedtripId === tripdata?.tripId) ? (
                         <AiOutlineLoading3Quarters className="spin-icon" />
                       ) : (
                         "DELETE"
