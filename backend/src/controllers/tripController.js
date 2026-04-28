@@ -4,112 +4,93 @@ const groq = require("../config/grok");
 const  {db}  = require('../config/firebase');
 const getPlaceImages = require('../service/getPlaceImages');
 
-const generateTrip  = async(req, res)=>{
 
-    try
-    {   
+const generateTrip = async (req, res) => {
+    try {
         const { destination, days, budget, members } = req.body;
         const userId = req.user && req.user.userId;
 
+        if (!destination || !days || !budget || !members) return sendError("All fields are required");
 
-        if (!destination || !days || !budget || !members) 
-        {
-            return res.status(400).json({ error: "All fields are required" });
-        }
+       if (!userId) return sendError("User not authenticated");
 
-        if (!userId) 
-        {
-            return res.status(401).json({ error: "User not authenticated" });
-        }
+        // ─── Helper: safe JSON parse ───────────────────────────────
+        const safeParseJSON = (text, isArray = false) => {
+            try {
+                const start = text.indexOf(isArray ? "[" : "{");
+                const end   = text.lastIndexOf(isArray ? "]" : "}");
+                if (start === -1 || end === -1) return null;
+                return JSON.parse(text.substring(start, end + 1).trim());
+            } catch {
+                return null; // never crash, just return null
+            }
+        };
 
-
-        const prompt = `Generate a trip plan for ${destination} for ${days} days with a budget of ${budget} for ${members} people. 
-        Give me only a valid JSON response without any extra text and also give me "valid and working " image url for the image of the location and multiple hotels recomend atleast 5 hotels to stay   and suggest atleast 3 to 4  places per day . The JSON should include:
-        {
-        "hotels": [ { "name": "Hotel X", "address": "XYZ", "price": 100, "image_url": "URL", "geo": { "lat": 0, "lng": 0 } },
-                    {"name": "Hotel y", "address": "XYZ", "price": 100, "image_url": "URL", "geo": { "lat": 0, "lng": 0 }},
-                    {"name": "Hotel z", "address": "XYZ", "price": 100, "image_url": "URL", "geo": { "lat": 0, "lng": 0 }}
-                ],
-        "itinerary": [ { "day": 1, "places": [ { "name": "Place A", "address": "XYZ", "details": "desc", "image_url": "URL", "geo": { "lat": 0, "lng": 0 }, "ticket_price": 10, "travel_time": "30 mins" } ] } ]
-        }`
-
-
-        //generate response from gemeni ai 
-        // const response = await ai.models.generateContent({
-        //     model: "gemini-2.0-flash",
-        //     contents: prompt,
-        // });
-
-        // const responseText = response.text;
-
-        const completion = await groq.chat.completions.create({
-            model: "llama-3.3-70b-versatile",
-            messages: [
-                { role: "user", content: prompt }
-            ],
-            temperature: 0.4,
-        });
-        
-        //extract ai text
-        // console.log("Completion is : ", completion)
-        const responseText = completion.choices[0].message.content;
-
-        // console.log("Response from ai is : ",responseText);
-
-        
-        
-        
-       
-
-
-        //validate the response if the gemini is given a valid json or not
-        const jsonStart = responseText.indexOf("{");
-        const jsonEnd = responseText.lastIndexOf("}");
-
-
-        if (jsonStart === -1 || jsonEnd === -1) 
-        {
-            console.error("AI returned invalid JSON:", responseText);
-            return res.status(500).json({ error: "AI returned invalid response" });
-        }
-
-        //string to json conversion
-        const tripplan = JSON.parse(responseText.substring(jsonStart, jsonEnd + 1).trim());
-        const tripId = Date.now().toString();
-
-      
-        //step 2  : fetching images fron=m heper function 
-        const destinationImage = await getPlaceImages(destination); 
-
-
-        //hotel image url 
-        // console.log("trip plan is .....................",tripplan);
-        if(tripplan?.hotels)
-        {
-            for(const hotel of tripplan.hotels)
-            {
-                const hotelimgquery = `${hotel.name} ${hotel?.address || destination}`
-                const imagurl = await getPlaceImages(hotelimgquery); //replace hotel.name
-                hotel.image_url = imagurl || null;
-
-            } 
-        }
-
-        //for place 
-        if(tripplan?.itinerary) 
-        {
-            // console.log("trip iternery ... ",tripplan?.itinerary)
-            for(const day of tripplan.itinerary)
-            {
-                for(const place of day.places)
-                {
-                    // console.log("place is ----------",place)
-                    const querysearch = `${place?.name}`
-                    const placeimgurl = await getPlaceImages(querysearch); //place.name
-                    place.image_url = placeimgurl || null;
+        // ─── Helper: call Groq with retry ──────────────────────────
+        const callGroq = async (prompt, retries = 2) => {
+            for (let i = 0; i <= retries; i++) {
+                try {
+                    const completion = await groq.chat.completions.create({
+                        model: "llama-3.3-70b-versatile",
+                        messages: [{ role: "user", content: prompt }],
+                        temperature: 0.4,
+                        max_tokens: 2000, // small & safe per request
+                    });
+                    return completion.choices[0].message.content;
+                } catch (err) {
+                    if (i === retries) return null;
+                    await new Promise(r => setTimeout(r, 1000)); // wait 1s before retry
                 }
             }
+        };
+
+        // ─── Step 1: Generate Hotels ───────────────────────────────
+        const hotelPrompt = `
+            Generate exactly 5 hotels in ${destination} for ${members} people with a budget of ${budget}.
+            Return ONLY a valid JSON array, no extra text:
+            [{"name":"","address":"","price":0,"geo":{"lat":0,"lng":0}}]
+        `;
+
+        const hotelText  = await callGroq(hotelPrompt);
+        const hotels     = safeParseJSON(hotelText, true) || []; // fallback to empty array
+
+
+        // ─── Step 2: Generate Each Day Separately ─────────────────
+        const itinerary = [];
+
+        for (let day = 1; day <= parseInt(days); day++) {
+            const dayPrompt = `
+                Generate 3-4 places to visit on Day ${day} in ${destination}.
+                Return ONLY a valid JSON array, no extra text:
+                [{"name":"","address":"","details":"","geo":{"lat":0,"lng":0},"ticket_price":0,"travel_time":""}]
+            `;
+
+            const dayText  = await callGroq(dayPrompt);
+            const places   = safeParseJSON(dayText, true);
+
+            if (places && places.length > 0) {
+                itinerary.push({ day, places });
+            } else {
+                // never crash — push empty day with a warning
+                console.warn(`Day ${day} generation failed, skipping.`);
+                itinerary.push({ day, places: [], error: "Failed to generate places for this day" });
+            }
         }
+        const destinationImage = await getPlaceImages(destination).catch(() => null);
+
+        for (const hotel of hotels) {
+            hotel.image_url = await getPlaceImages(`${hotel.name} ${hotel.address || destination}`)
+                .catch(() => null);
+        }
+
+        for (const day of itinerary) {
+            for (const place of day.places) {
+                place.image_url = await getPlaceImages(place.name).catch(() => null);
+            }
+        }
+
+        const tripId  = Date.now().toString();
+        const tripplan = { hotels, itinerary };
 
         await db.collection("AiGeneratedTrips").doc(tripId).set({
             tripId,
@@ -120,10 +101,8 @@ const generateTrip  = async(req, res)=>{
             members,
             tripplan,
             coverImage: destinationImage || null,
-            
             createdAt: new Date(),
         });
-
 
         return res.status(201).json({
             message: "Trip successfully created",
@@ -131,18 +110,11 @@ const generateTrip  = async(req, res)=>{
             docId: tripId,
         });
 
-    }
-    catch(error)
-    {
+    } catch (error) {
         console.error("generateTrip error:", error);
         return res.status(500).json({ error: "Failed to generate trip" });
     }
-    
-}
-
-
-
-
+};
 
 
 const fetchTripById = async(req, res)=>{
@@ -170,9 +142,6 @@ const fetchTripById = async(req, res)=>{
         res.status(500).json({ success: false, message: 'Failed to fetch trip' });
     }
 }
-
-
-
 
 const fetchTripHistory = async(req,res)=>{
     
@@ -209,7 +178,6 @@ const fetchTripHistory = async(req,res)=>{
     }
 }
 
-
 const deleteTrip = async(req,res)=>{
     console.log("Inside deleteTrip");
 
@@ -233,8 +201,6 @@ const deleteTrip = async(req,res)=>{
     }
    
 }
-
-
 
 const fetchImage  = async(req, res)=>{
     const axios = require("axios");
@@ -269,3 +235,142 @@ const fetchImage  = async(req, res)=>{
 }
 
 module.exports = {generateTrip, fetchTripById, fetchImage, fetchTripHistory, deleteTrip};
+
+
+// 
+// const generateTrip  = async(req, res)=>{
+
+//     try
+//     {   
+//         const { destination, days, budget, members } = req.body;
+//         const userId = req.user && req.user.userId;
+
+
+//         if (!destination || !days || !budget || !members) 
+//         {
+//             return res.status(400).json({ error: "All fields are required" });
+//         }
+
+//         if (!userId) 
+//         {
+//             return res.status(401).json({ error: "User not authenticated" });
+//         }
+
+
+//         const prompt = `Generate a trip plan for ${destination} for ${days} days with a budget of ${budget} for ${members} people. 
+//         Give me only a valid JSON response without any extra text and also give me "valid and working " image url for the image of the location and multiple hotels recomend atleast 5 hotels to stay   and suggest atleast 3 to 4  places per day . The JSON should include:
+//         {
+//         "hotels": [ { "name": "Hotel X", "address": "XYZ", "price": 100, "image_url": "URL", "geo": { "lat": 0, "lng": 0 } },
+//                     {"name": "Hotel y", "address": "XYZ", "price": 100, "image_url": "URL", "geo": { "lat": 0, "lng": 0 }},
+//                     {"name": "Hotel z", "address": "XYZ", "price": 100, "image_url": "URL", "geo": { "lat": 0, "lng": 0 }}
+//                 ],
+//         "itinerary": [ { "day": 1, "places": [ { "name": "Place A", "address": "XYZ", "details": "desc", "image_url": "URL", "geo": { "lat": 0, "lng": 0 }, "ticket_price": 10, "travel_time": "30 mins" } ] } ]
+//         }`
+
+
+//         //generate response from gemeni ai 
+//         // const response = await ai.models.generateContent({
+//         //     model: "gemini-2.0-flash",
+//         //     contents: prompt,
+//         // });
+
+//         // const responseText = response.text;
+
+//         const completion = await groq.chat.completions.create({
+//             model: "llama-3.3-70b-versatile",
+//             messages: [
+//                 { role: "user", content: prompt }
+//             ],
+//             temperature: 0.4,
+//         });
+        
+//         //extract ai text
+//         // console.log("Completion is : ", completion)
+//         const responseText = completion.choices[0].message.content;
+//         console.log("responseText is ",responseText)
+//         // console.log("Response from ai is : ",responseText);
+
+        
+        
+        
+       
+
+
+//         //validate the response if the gemini is given a valid json or not
+//         const jsonStart = responseText.indexOf("{");
+//         const jsonEnd = responseText.lastIndexOf("}");
+
+
+//         if (jsonStart === -1 || jsonEnd === -1) 
+//         {
+//             console.error("AI returned invalid JSON:", responseText);
+//             console.log("inncorect json ")
+//             return res.status(500).json({ error: "AI returned invalid response" });
+//         }
+
+//         //string to json conversion
+//         const tripplan = JSON.parse(responseText.substring(jsonStart, jsonEnd + 1).trim());
+//         const tripId = Date.now().toString();
+
+      
+//         //step 2  : fetching images fron=m heper function 
+//         const destinationImage = await getPlaceImages(destination); 
+
+
+//         //hotel image url 
+//         // console.log("trip plan is .....................",tripplan);
+//         if(tripplan?.hotels)
+//         {
+//             for(const hotel of tripplan.hotels)
+//             {
+//                 const hotelimgquery = `${hotel.name} ${hotel?.address || destination}`
+//                 const imagurl = await getPlaceImages(hotelimgquery); //replace hotel.name
+//                 hotel.image_url = imagurl || null;
+
+//             } 
+//         }
+
+//         //for place 
+//         if(tripplan?.itinerary) 
+//         {
+//             // console.log("trip iternery ... ",tripplan?.itinerary)
+//             for(const day of tripplan.itinerary)
+//             {
+//                 for(const place of day.places)
+//                 {
+//                     // console.log("place is ----------",place)
+//                     const querysearch = `${place?.name}`
+//                     const placeimgurl = await getPlaceImages(querysearch); //place.name
+//                     place.image_url = placeimgurl || null;
+//                 }
+//             }
+//         }
+
+//         await db.collection("AiGeneratedTrips").doc(tripId).set({
+//             tripId,
+//             userId,
+//             destination,
+//             days,
+//             budget,
+//             members,
+//             tripplan,
+//             coverImage: destinationImage || null,
+            
+//             createdAt: new Date(),
+//         });
+
+
+//         return res.status(201).json({
+//             message: "Trip successfully created",
+//             success: true,
+//             docId: tripId,
+//         });
+
+//     }
+//     catch(error)
+//     {
+//         console.error("generateTrip error:", error);
+//         return res.status(500).json({ error: "Failed to generate trip" });
+//     }
+    
+// }
